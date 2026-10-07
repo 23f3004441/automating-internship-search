@@ -26,12 +26,15 @@ CITIES = ["hyderabad", "bangalore", "chennai"]
 
 MIN_STIPEND = 10000
 MAX_JOBS = 80
-BATCH_SIZE = 5
-SECONDS_BETWEEN_BATCHES = 20
+BATCH_SIZE = 4
+SECONDS_BETWEEN_BATCHES = 25
 SEEN_DAYS = 60
 
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
-GROQ_MODEL = "llama-3.3-70b-versatile"
+# Groq retired llama-3.3-70b-versatile on 16 Aug 2026. If a model stops working, the next one is tried.
+MODELS = ["openai/gpt-oss-120b", "openai/gpt-oss-20b"]
+ACTIVE_MODELS = list(MODELS)
+LAST_GROQ_ERROR = ""
 SEEN_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "seen.json")
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -149,40 +152,70 @@ def parse_listings(page_html, seen, in_run):
     return jobs, found
 
 
-def call_groq(api_key, user_text):
-    payload = {
-        "model": GROQ_MODEL,
-        "temperature": 0.1,
-        "response_format": {"type": "json_object"},
-        "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": user_text},
-        ],
-    }
-    for attempt in range(4):
-        try:
-            r = requests.post(
-                GROQ_URL,
-                headers={"Authorization": "Bearer " + api_key},
-                json=payload,
-                timeout=60,
-            )
-        except requests.RequestException as e:
-            print("Groq error", e)
-            time.sleep(20)
-            continue
-        if r.status_code == 200:
-            return r.json()["choices"][0]["message"]["content"]
-        if r.status_code in (429, 500, 502, 503):
-            try:
-                wait = float(r.headers.get("retry-after", 20))
-            except ValueError:
-                wait = 20
-            print("Groq busy", r.status_code, "waiting", wait)
-            time.sleep(min(wait + 1, 90))
-            continue
-        print("Groq failed", r.status_code, r.text[:200])
+def extract_json(content):
+    try:
+        return json.loads(content)
+    except (ValueError, TypeError):
+        pass
+    try:
+        start = content.index("{")
+        end = content.rindex("}")
+        return json.loads(content[start : end + 1])
+    except (ValueError, AttributeError):
         return None
+
+
+def call_groq(api_key, user_text):
+    """Returns the model's text, or None. Falls back to the next model if one is retired."""
+    global LAST_GROQ_ERROR
+    for model in list(ACTIVE_MODELS):
+        use_json_mode = True
+        attempt = 0
+        while attempt < 4:
+            attempt += 1
+            payload = {
+                "model": model,
+                "temperature": 0.1,
+                "messages": [
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": user_text},
+                ],
+            }
+            if use_json_mode:
+                payload["response_format"] = {"type": "json_object"}
+            try:
+                r = requests.post(
+                    GROQ_URL,
+                    headers={"Authorization": "Bearer " + api_key},
+                    json=payload,
+                    timeout=90,
+                )
+            except requests.RequestException as e:
+                LAST_GROQ_ERROR = f"{model}: {e}"
+                print("Groq error", LAST_GROQ_ERROR)
+                time.sleep(20)
+                continue
+            if r.status_code == 200:
+                return r.json()["choices"][0]["message"]["content"]
+            LAST_GROQ_ERROR = f"{model}: HTTP {r.status_code} {r.text[:160]}"
+            print("Groq problem", LAST_GROQ_ERROR)
+            if r.status_code in (401, 403):
+                return None
+            if r.status_code in (429, 500, 502, 503):
+                try:
+                    wait = float(r.headers.get("retry-after", 20))
+                except ValueError:
+                    wait = 20
+                time.sleep(min(wait + 1, 90))
+                continue
+            if r.status_code == 400 and use_json_mode:
+                use_json_mode = False
+                attempt -= 1
+                continue
+            break
+        if len(ACTIVE_MODELS) > 1 and model in ACTIVE_MODELS:
+            ACTIVE_MODELS.remove(model)
+            print("Dropping model", model)
     return None
 
 
@@ -197,10 +230,8 @@ def score_jobs(api_key, jobs):
         content = call_groq(api_key, user_text)
         results = None
         if content:
-            try:
-                results = json.loads(content).get("results")
-            except (ValueError, AttributeError):
-                results = None
+            data = extract_json(content)
+            results = data.get("results") if isinstance(data, dict) else None
         if not isinstance(results, list):
             failed += 1
         else:
@@ -247,6 +278,8 @@ def compose_email(meta, scored, failed_batches):
         warn = f"{meta['pages_failed']} page(s) failed to load today, so the list may be incomplete."
     if failed_batches:
         warn += (" " if warn else "") + f"{failed_batches} scoring batch(es) failed. Those jobs will be tried again tomorrow."
+        if LAST_GROQ_ERROR:
+            warn += " Last Groq error: " + LAST_GROQ_ERROR
     if meta["overflow"] > 0:
         warn += (" " if warn else "") + f"{meta['overflow']} extra new listings will be scored tomorrow."
 
