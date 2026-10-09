@@ -8,10 +8,11 @@ scoring.
 import json
 import os
 import time
+from datetime import datetime, timezone
 
 import requests
 
-from sources.common import is_internship_title, location_tag, make_job, parse_stipend, strip_html
+from sources.common import is_internship_title, is_recent, location_tag, make_job, parse_stipend, strip_html
 
 COMPANIES_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "companies.json")
 USER_AGENT = (
@@ -53,10 +54,13 @@ def _greenhouse_jobs(company):
         keep, stipend = parse_stipend(text)
         if not keep:
             continue
+        posted = j.get("first_published") or j.get("updated_at") or ""
+        if not is_recent(posted):
+            continue
         out.append(
             make_job(
                 "greenhouse", company["name"], title, loc,
-                j.get("absolute_url", ""), text, stipend,
+                j.get("absolute_url", ""), text, stipend, posted,
             )
         )
     return out
@@ -80,10 +84,17 @@ def _lever_jobs(company):
         keep, stipend = parse_stipend(text)
         if not keep:
             continue
+        created_ms = j.get("createdAt")
+        posted = (
+            datetime.fromtimestamp(created_ms / 1000, tz=timezone.utc).isoformat()
+            if created_ms else ""
+        )
+        if not is_recent(posted):
+            continue
         out.append(
             make_job(
                 "lever", company["name"], title, loc,
-                j.get("hostedUrl", ""), text, stipend,
+                j.get("hostedUrl", ""), text, stipend, posted,
             )
         )
     return out
@@ -106,10 +117,13 @@ def _ashby_jobs(company):
         keep, stipend = parse_stipend(text)
         if not keep:
             continue
+        posted = j.get("publishedAt", "") or ""
+        if not is_recent(posted):
+            continue
         out.append(
             make_job(
                 "ashby", company["name"], title, loc,
-                j.get("jobUrl", ""), text, stipend,
+                j.get("jobUrl", ""), text, stipend, posted,
             )
         )
     return out

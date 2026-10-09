@@ -6,7 +6,7 @@ import time
 
 import requests
 
-from sources.common import make_job, parse_stipend
+from sources.common import is_recent, make_job, parse_stipend
 
 BASE = "https://internshala.com/internships/"
 PROFILES = "work-from-home-ai-agent-development,artificial-intelligence-ai-internships-in-"
@@ -81,10 +81,12 @@ def _parse_listings(page_html, seen_urls):
             text,
             re.I,
         )
+        posted = pm.group(1) if pm else ""
+        if not is_recent(posted):
+            continue
         jobs.append(
             make_job(
-                "internshala", "", title, "", url, text[:600], label,
-                pm.group(1) if pm else "",
+                "internshala", "", title, "", url, text[:600], label, posted,
             )
         )
     return jobs

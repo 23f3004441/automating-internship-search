@@ -3,7 +3,7 @@ import os
 
 import requests
 
-from sources.common import is_internship_title, location_tag, make_job, parse_stipend
+from sources.common import MAX_AGE_DAYS, is_internship_title, is_recent, location_tag, make_job, parse_stipend
 
 ADZUNA_URL = "https://api.adzuna.com/v1/api/jobs/in/search/1"
 CITIES = ["Hyderabad", "Bangalore", "Chennai"]
@@ -15,6 +15,8 @@ def _search(app_id, app_key, where=None):
         "app_key": app_key,
         "what": "internship",
         "results_per_page": 50,
+        "max_days_old": MAX_AGE_DAYS,
+        "sort_by": "date",
         "content-type": "application/json",
     }
     if where:
@@ -62,6 +64,8 @@ def fetch():
                 continue
             keep, stipend = parse_stipend(desc)
             if not keep:
+                continue
+            if not is_recent(posted):
                 continue
             seen_urls.add(url)
             jobs.append(make_job("adzuna", company, title, loc, url, desc, stipend, posted))

@@ -3,7 +3,7 @@ each one responds reliably, each call is wrapped so one board failing does
 not block the others."""
 import requests
 
-from sources.common import is_internship_title, location_tag, make_job, parse_stipend, strip_html
+from sources.common import is_internship_title, is_recent, location_tag, make_job, parse_stipend, strip_html
 
 UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) internship-finder/1.0"}
 
@@ -33,9 +33,12 @@ def _remotive():
         keep, stipend = parse_stipend(desc)
         if not keep:
             continue
+        posted = j.get("publication_date", "")
+        if not is_recent(posted):
+            continue
         out.append(make_job(
             "remotive", j.get("company_name", ""), title, loc,
-            j.get("url", ""), desc, stipend, j.get("publication_date", ""),
+            j.get("url", ""), desc, stipend, posted,
         ))
     return out, None
 
@@ -61,12 +64,15 @@ def _remoteok():
         keep, stipend = parse_stipend(desc)
         if not keep:
             continue
+        posted = j.get("date", "")
+        if not is_recent(posted):
+            continue
         url = j.get("url", "") or j.get("apply_url", "")
         if url and url.startswith("/"):
             url = "https://remoteok.com" + url
         out.append(make_job(
             "remoteok", j.get("company", ""), title, loc,
-            url, desc, stipend, j.get("date", ""),
+            url, desc, stipend, posted,
         ))
     return out, None
 
@@ -94,9 +100,12 @@ def _himalayas():
         keep, stipend = parse_stipend(desc)
         if not keep:
             continue
+        posted = j.get("pubDate", "")
+        if not is_recent(posted):
+            continue
         out.append(make_job(
             "himalayas", j.get("companyName", ""), title, loc,
-            j.get("applicationLink", ""), desc, stipend, j.get("pubDate", ""),
+            j.get("applicationLink", ""), desc, stipend, posted,
         ))
     return out, None
 

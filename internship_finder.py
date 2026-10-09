@@ -398,6 +398,10 @@ def run(dry_run=False):
             raise SystemExit("GROQ_API_KEY is not set")
         scored, failed_batches = score_jobs(api_key, all_jobs)
 
+    print("All scored jobs (not in the email, for checking why things scored low):")
+    for j in sorted(scored, key=lambda x: x["score"], reverse=True):
+        print(f"  {j['score']:>2} | {j['source']:10s} | {j['company'][:30]:30s} | {j['title'][:60]:60s} | {j['reason']}")
+
     subject, body = compose_email(meta, scored, failed_batches)
     print(subject, {k: v for k, v in meta.items() if k not in ("company_feeds", "jsearch")})
     print("Company feeds failed:", meta["company_feeds"].get("companies_failed"))

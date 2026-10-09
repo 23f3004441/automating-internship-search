@@ -1,8 +1,10 @@
 """Shared helpers used by every source module."""
 import html as htmllib
 import re
+from datetime import datetime, timezone
 
 MIN_STIPEND = 10000
+MAX_AGE_DAYS = 30
 
 INDIA_WORDS = [
     "india", "bangalore", "bengaluru", "hyderabad", "chennai", "pune",
@@ -31,6 +33,21 @@ TECH_TITLE_RE = re.compile(
 )
 UNKNOWN_TITLES = {"", "internship"}
 
+# Words that show up constantly in non technical titles. "Learning and
+# Development", "Business Development", "Content Marketing" and similar all
+# contain a tech sounding word (development, platform) while being nothing
+# of the sort, so these only get through if a clearly technical word is also
+# in the title.
+BLOCK_TITLE_RE = re.compile(
+    r"\blearning\b|\bsupport\b|\bsales\b|\bmarketing\b|\bhr\b|\bhuman resources\b|"
+    r"\bcontent\b|\bbusiness\b|\boperations\b",
+    re.I,
+)
+CLEAR_TECH_RE = re.compile(
+    r"\bsoftware\b|\bengineer\w*|\bdeveloper\b|\bdata\b|\bai\b|artificial intelligence|\bautomation\b",
+    re.I,
+)
+
 
 def is_internship_title(title):
     return bool(INTERN_TITLE_RE.search(title or ""))
@@ -42,6 +59,8 @@ def is_tech_title(title):
     title = (title or "").strip()
     if title.lower() in UNKNOWN_TITLES:
         return True
+    if BLOCK_TITLE_RE.search(title) and not CLEAR_TECH_RE.search(title):
+        return False
     return bool(TECH_TITLE_RE.search(title))
 
 
@@ -93,18 +112,48 @@ def parse_stipend(text):
     return True, "stipend not listed"
 
 
+def is_recent(posted_text, max_days=MAX_AGE_DAYS):
+    """True if posted_text parses to a date within max_days, or if it cannot
+    be parsed at all (missing or unusual data should not silently drop a
+    listing). Handles ISO datetimes (most sources) and the relative English
+    text Internshala uses, such as "3 days ago" or "Yesterday"."""
+    if not posted_text:
+        return True
+    text = posted_text.strip()
+    iso = text[:-1] + "+00:00" if text.endswith("Z") else text
+    try:
+        dt = datetime.fromisoformat(iso)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return (datetime.now(timezone.utc) - dt).days <= max_days
+    except ValueError:
+        pass
+    low = text.lower()
+    if any(w in low for w in ("just now", "few hours ago", "today", "yesterday")):
+        return True
+    m = re.search(r"(\d+)\s*(hour|day|week|month)s?\s+ago", low)
+    if m:
+        n = int(m.group(1))
+        days = {"hour": n / 24, "day": n, "week": n * 7, "month": n * 30}[m.group(2)]
+        return days <= max_days
+    return True
+
+
 def passes_prefilter(job):
     """The last, cheap check before a job is sent to Groq. Drops anything
     with a title that shows no tech work, anything whose location does not
-    match the India, remote India allowed, or UAE rule, and anything that
-    fails the stipend rule. This repeats checks each source module already
-    makes, it is a safety net so nothing slips through regardless of source."""
+    match the India, remote India allowed, or UAE rule, anything that fails
+    the stipend rule, and anything older than MAX_AGE_DAYS. This repeats
+    checks each source module already makes, it is a safety net so nothing
+    slips through regardless of source."""
     if not is_tech_title(job.get("title", "")):
         return False
     if not location_tag(job.get("location", "")) and not location_tag((job.get("text") or "")[:300]):
         return False
     keep, _ = parse_stipend(job.get("text", ""))
     if not keep:
+        return False
+    if not is_recent(job.get("posted", "")):
         return False
     return True
 
