@@ -112,20 +112,62 @@ def parse_stipend(text):
     return True, "stipend not listed"
 
 
-def is_recent(posted_text, max_days=MAX_AGE_DAYS):
-    """True if posted_text parses to a date within max_days, or if it cannot
-    be parsed at all (missing or unusual data should not silently drop a
-    listing). Handles ISO datetimes (most sources) and the relative English
-    text Internshala uses, such as "3 days ago" or "Yesterday"."""
-    if not posted_text:
+def _epoch_to_datetime(value):
+    """Epoch seconds or milliseconds (int or float) to an aware datetime, or
+    None if the number is not a usable timestamp."""
+    try:
+        n = float(value)
+        if n != n or n in (float("inf"), float("-inf")):
+            return None
+        if abs(n) >= 1e11:  # too large to be seconds, so milliseconds
+            n /= 1000
+        return datetime.fromtimestamp(n, tz=timezone.utc)
+    except (ValueError, OverflowError, OSError, TypeError):
+        return None
+
+
+def to_posted_text(value):
+    """Turns a raw posting date of any type into the string stored on a job:
+    numbers become ISO datetimes, strings pass through, anything else is ''."""
+    if isinstance(value, bool) or not value:  # None, 0 and "" all mean missing
+        return ""
+    if isinstance(value, (int, float)):
+        dt = _epoch_to_datetime(value)
+        return dt.isoformat() if dt else ""
+    return value if isinstance(value, str) else ""
+
+
+def is_recent(posted, max_days=MAX_AGE_DAYS):
+    """True if posted parses to a date within max_days, or if it cannot be
+    parsed at all (missing or unusual data should not silently drop a
+    listing). Never raises. Accepts epoch seconds or milliseconds as int or
+    float, ISO datetimes (most sources) and the relative English text
+    Internshala uses, such as "3 days ago" or "Yesterday"."""
+    try:
+        return _is_recent(posted, max_days)
+    except Exception:
         return True
-    text = posted_text.strip()
+
+
+def _is_recent(posted, max_days):
+    if posted is None or isinstance(posted, bool) or not posted:
+        return True
+    now = datetime.now(timezone.utc)
+    if isinstance(posted, (int, float)):
+        dt = _epoch_to_datetime(posted)
+        return True if dt is None else (now - dt).days <= max_days
+    if not isinstance(posted, str):
+        return True
+    text = posted.strip()
+    if text.isdigit() and len(text) >= 10:  # epoch sent as a string
+        dt = _epoch_to_datetime(int(text))
+        return True if dt is None else (now - dt).days <= max_days
     iso = text[:-1] + "+00:00" if text.endswith("Z") else text
     try:
         dt = datetime.fromisoformat(iso)
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
-        return (datetime.now(timezone.utc) - dt).days <= max_days
+        return (now - dt).days <= max_days
     except ValueError:
         pass
     low = text.lower()
@@ -174,6 +216,6 @@ def make_job(source, company, title, location, url, text, stipend="stipend not l
         "location": location or "",
         "url": url,
         "stipend": stipend,
-        "posted": posted,
-        "text": text[:1500],
+        "posted": to_posted_text(posted),
+        "text": (text or "")[:1500],
     }

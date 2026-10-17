@@ -36,7 +36,10 @@ jobs:
           ADZUNA_APP_ID: ${{ secrets.ADZUNA_APP_ID }}
           ADZUNA_APP_KEY: ${{ secrets.ADZUNA_APP_KEY }}
 
+      # always() so JSearch requests used by a run that later failed are still recorded.
+      # seen.json is only written by the script after the email is sent, so a failed run leaves it unchanged.
       - name: Save the list of jobs already sent and the JSearch usage count
+        if: always()
         run: |
           git config user.name "internship-bot"
           git config user.email "internship-bot@users.noreply.github.com"

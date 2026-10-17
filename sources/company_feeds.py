@@ -8,11 +8,10 @@ scoring.
 import json
 import os
 import time
-from datetime import datetime, timezone
 
 import requests
 
-from sources.common import is_internship_title, is_recent, location_tag, make_job, parse_stipend, strip_html
+from sources.common import is_internship_title, is_recent, location_tag, make_job, parse_stipend, strip_html, to_posted_text
 
 COMPANIES_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "companies.json")
 USER_AGENT = (
@@ -84,11 +83,7 @@ def _lever_jobs(company):
         keep, stipend = parse_stipend(text)
         if not keep:
             continue
-        created_ms = j.get("createdAt")
-        posted = (
-            datetime.fromtimestamp(created_ms / 1000, tz=timezone.utc).isoformat()
-            if created_ms else ""
-        )
+        posted = to_posted_text(j.get("createdAt"))
         if not is_recent(posted):
             continue
         out.append(

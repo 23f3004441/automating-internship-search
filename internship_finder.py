@@ -21,6 +21,7 @@ import os
 import smtplib
 import sys
 import time
+import traceback
 from datetime import datetime, timedelta, timezone
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -210,6 +211,8 @@ def compose_email(meta, scored, failed_batches):
 
     warn_parts = []
     cf = meta.get("company_feeds", {})
+    for err in cf.get("errors", []):
+        warn_parts.append(f"Company career pages: {err}")
     if cf.get("companies_failed"):
         warn_parts.append(
             f"{len(cf['companies_failed'])} company feed(s) did not respond today: "
@@ -225,6 +228,8 @@ def compose_email(meta, scored, failed_batches):
     for err in rb.get("errors", []):
         warn_parts.append(f"Remote boards: {err}")
     ih = meta.get("internshala", {})
+    for err in ih.get("errors", []):
+        warn_parts.append(f"Internshala: {err}")
     if ih.get("pages_ok", 1) == 0:
         warn_parts.append("Could not load any Internshala page today.")
     elif ih.get("pages_failed", 0) > 0:
@@ -323,27 +328,30 @@ def collect_jobs(seen):
     all_jobs = []
     meta = {}
 
-    cf_jobs, cf_meta = company_feeds.fetch()
-    all_jobs.extend(cf_jobs)
-    meta["company_feeds"] = cf_meta
+    def run_source(meta_key, label, fn):
+        """Runs one source. If it crashes, the real exception goes to the log,
+        the email gets a plain warning, and the other sources still run."""
+        try:
+            jobs, source_meta = fn()
+        except Exception as e:
+            print(f"{label} crashed: {type(e).__name__}: {e}")
+            traceback.print_exc()
+            meta[meta_key] = {"errors": ["crashed"]}
+            return
+        all_jobs.extend(jobs)
+        meta[meta_key] = source_meta
 
-    js_jobs, js_meta, js_usage = jsearch.fetch()
-    all_jobs.extend(js_jobs)
-    meta["jsearch"] = js_meta
-    jsearch.save_usage(js_usage)
-
-    az_jobs, az_meta = adzuna.fetch()
-    all_jobs.extend(az_jobs)
-    meta["adzuna"] = az_meta
-
-    rb_jobs, rb_meta = remote_boards.fetch()
-    all_jobs.extend(rb_jobs)
-    meta["remote_boards"] = rb_meta
+    def fetch_jsearch():
+        jobs, source_meta, usage = jsearch.fetch()
+        jsearch.save_usage(usage)
+        return jobs, source_meta
 
     seen_urls = set(seen)
-    ih_jobs, ih_meta = internshala.fetch(seen_urls)
-    all_jobs.extend(ih_jobs)
-    meta["internshala"] = ih_meta
+    run_source("company_feeds", "Company feeds", company_feeds.fetch)
+    run_source("jsearch", "JSearch", fetch_jsearch)
+    run_source("adzuna", "Adzuna", adzuna.fetch)
+    run_source("remote_boards", "Remote boards", remote_boards.fetch)
+    run_source("internshala", "Internshala", lambda: internshala.fetch(seen_urls))
 
     fetched_counts = _count_by_group(all_jobs)
 
@@ -404,7 +412,7 @@ def run(dry_run=False):
 
     subject, body = compose_email(meta, scored, failed_batches)
     print(subject, {k: v for k, v in meta.items() if k not in ("company_feeds", "jsearch")})
-    print("Company feeds failed:", meta["company_feeds"].get("companies_failed"))
+    print("Company feeds failed:", meta.get("company_feeds", {}).get("companies_failed"))
     print("JSearch:", meta.get("jsearch"))
     print("Adzuna:", meta.get("adzuna"))
     print("Remote boards:", meta.get("remote_boards"))
